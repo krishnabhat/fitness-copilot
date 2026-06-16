@@ -11,6 +11,7 @@ profile/.mesocycle.json
 profile/.monthly_state
 profile/health_metrics.json
 profile/activity_log.jsonl
+profile/notes.jsonl
 profile/.telegram_offset
 profile/.oura_key
 workouts/

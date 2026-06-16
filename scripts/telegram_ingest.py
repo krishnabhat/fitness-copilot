@@ -26,6 +26,21 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notify_telegram   # noqa: E402  (load_creds, send_message)
 import activity_log      # noqa: E402
+import notes             # noqa: E402
+
+PAIN_WORDS = ["pain", "hurt", "sore", "soreness", "ache", "aching", "tweak",
+              "stiff", "strain", "sprain", "injured", "injury", "tight",
+              "pulled", "spasm", "cramp", "throb"]
+STATUS_WORDS = ["tired", "exhausted", "fatigued", "didn't sleep", "didnt sleep",
+                "stressed", "sick", "ill", "flu", "run down", "rundown",
+                "low energy", "drained", "burnt out", "burned out", "wiped"]
+RED_FLAG_WORDS = ["sharp", "radiating", "shooting", "numb", "tingl", "chest pain",
+                  "can't move", "cant move", "severe", "dizzy", "faint",
+                  "short of breath", "shortness of breath"]
+BODY_PARTS = ["lower back", "upper back", "back", "neck", "shoulder", "knee",
+              "hip", "ankle", "wrist", "elbow", "hamstring", "quad", "calf",
+              "groin", "spine", "disc", "achilles", "foot", "leg", "thigh"]
+WORKOUT_SIGNAL = ["workout", "session", "trained", "exercised", "gym", "wod"]
 
 OFFSET_FILE = os.path.expanduser("~/.claude/skills/fitness-copilot/profile/.telegram_offset")
 
@@ -127,36 +142,67 @@ def poll(quiet=False):
         # separate same-day session.
         override = text.lower().startswith(("also:", "force:"))
         clean = text.split(":", 1)[1].strip() if override else text
+        low = clean.lower()
         atype, dist_km, dur_min = parse_activity(clean)
+        is_pain = any(w in low for w in PAIN_WORDS)
+        is_status = any(w in low for w in STATUS_WORDS)
+        red_flag = any(w in low for w in RED_FLAG_WORDS)
+        # A "strong" workout signal can't be a false positive from ambiguous words
+        # like "lower"/"leg" (which appear in "lower back"/"my leg hurts").
+        strong_workout = (bool(dist_km) or bool(dur_min)
+                          or atype in ("run", "bike", "walk", "swim", "yoga", "hiit")
+                          or any(w in low for w in WORKOUT_SIGNAL))
+        # For pain/status messages, only log an activity on a strong signal (so
+        # "my lower back is tight" doesn't get mis-logged as a strength session).
+        has_workout = strong_workout if (is_pain or is_status) else (
+            (atype != "other") or dist_km or dur_min or any(w in low for w in WORKOUT_SIGNAL))
+        part = next((b for b in BODY_PARTS if b in low), None)
+        reply_bits = []
 
-        # Duplicate guard: if an activity of the same type is already logged today
-        # (e.g. mirrored from HEVY, or an earlier text), don't double-count.
-        if not override:
+        # 1) Pain / status note → constraints store (NEVER counts as a workout).
+        if is_pain or is_status:
+            notes.append_note(clean, kind="pain" if is_pain else "status", red_flag=red_flag)
+            logged += 1
+            if red_flag:
+                reply_bits.append("⚠️ Noted — that can be serious. If it's sharp, "
+                    "radiating, numb, or comes with chest pain/dizziness, please STOP "
+                    "and see a clinician. I'll keep training off that area until you're cleared.")
+            elif is_pain:
+                reply_bits.append(f"Got it — noted your {part or 'pain'}. I'll program "
+                    "around it next session (avoid loading that area). Tell me if it "
+                    "turns sharp or radiates.")
+            else:
+                reply_bits.append("Noted — I'll factor that into your next plan "
+                    "(lighter if you're run down).")
+
+        # 2) Activity (with cross-source duplicate guard).
+        if has_workout:
             today = date.today().isoformat()
-            dups = [e for e in activity_log.read_all()
-                    if e.get("date") == today and e.get("type") == atype]
-            if dups:
-                srcs = ", ".join(sorted({e.get("source", "?") for e in dups}))
-                try:
-                    notify_telegram.send_message(
-                        creds, f"⚠️ A '{atype}' is already logged today (from {srcs}), "
-                        f"so I didn't add a duplicate. If this was a separate session, "
-                        f"text:  also: {clean}")
-                except Exception:
-                    pass
-                continue
+            dup = (not override) and any(
+                e.get("date") == today and e.get("type") == atype
+                for e in activity_log.read_all())
+            if dup:
+                reply_bits.append(f"(a '{atype}' is already logged today — not "
+                    "double-counting; text 'also: …' to force a separate one.)")
+            else:
+                entry = {"source": "telegram", "type": atype,
+                         "title": clean[:80], "detail": clean[:300]}
+                if dist_km:
+                    entry["distance_km"] = dist_km
+                if dur_min:
+                    entry["duration_min"] = dur_min
+                activity_log.append_entry(entry, dedup=False)
+                logged += 1
+                reply_bits.append(confirm_text(atype, dist_km, dur_min, hevy_units_lb()))
 
-        entry = {"source": "telegram", "type": atype, "title": clean[:80],
-                 "detail": clean[:300]}
-        if dist_km:
-            entry["distance_km"] = dist_km
-        if dur_min:
-            entry["duration_min"] = dur_min
-        activity_log.append_entry(entry, dedup=False)
-        logged += 1
+        # 3) Neither → keep as a general note (nothing lost, no workout inflation).
+        if not (is_pain or is_status) and not has_workout:
+            notes.append_note(clean, kind="note")
+            logged += 1
+            reply_bits.append("Noted ✓")
+
         try:
-            units_lb = hevy_units_lb()
-            notify_telegram.send_message(creds, confirm_text(atype, dist_km, dur_min, units_lb))
+            notify_telegram.send_message(creds, " ".join(reply_bits))
         except Exception:
             pass
 
