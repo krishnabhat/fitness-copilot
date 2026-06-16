@@ -1,0 +1,8 @@
+# Keep personal health data and secrets local — never commit these.
+profile.md
+training-log.md
+.hevy_key
+.hevy_templates_cache.json
+*.local.md
+*.log
+.telegram

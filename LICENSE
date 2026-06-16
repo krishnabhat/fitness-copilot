@@ -1,0 +1,22 @@
+Fitness Copilot — Proprietary License
+Copyright (c) 2026 Krishna Bhat. All rights reserved.
+
+This software and associated files (the "Software") are made available for
+PERSONAL, NON-COMMERCIAL use only. You may install, run, and modify the Software
+for your own individual training.
+
+You may NOT, without a separate commercial license from the copyright holder:
+  - sell, resell, sublicense, or redistribute the Software or derivative works;
+  - offer the Software (or a service based on it) to third parties for a fee;
+  - remove or alter this notice.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. IT IS NOT MEDICAL
+ADVICE AND IS NOT A SUBSTITUTE FOR A LICENSED CLINICIAN. THE AUTHOR IS NOT LIABLE
+FOR ANY INJURY, HEALTH OUTCOME, OR DAMAGES ARISING FROM USE OF THE SOFTWARE. USE
+AT YOUR OWN RISK AND CONSULT QUALIFIED PROFESSIONALS.
+
+For commercial licensing, contact: krishna.bhat@gmail.com
+
+(Note: this is a starting-point license, not legal advice. Swap in MIT/Apache for
+fully open source, or a vetted commercial EULA before charging — see a lawyer for
+anything you monetize.)

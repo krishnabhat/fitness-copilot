@@ -1,0 +1,66 @@
+#!/bin/zsh
+# Nightly auto-planner for the fitness-copilot skill.
+# Runs headless Claude Code at ~9 PM to plan tomorrow's workout, render the HTML,
+# and push it to HEVY as a routine — so in the morning you just open HEVY and train.
+# Scheduled by ~/Library/LaunchAgents/com.fitness-copilot.autoplan.plist
+# Logs to profile/autoplan.log. To disable: launchctl bootout gui/$(id -u)/com.fitness-copilot.autoplan
+
+# launchd starts with a minimal PATH — set the tools we need explicitly.
+export PATH="/opt/homebrew/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+SKILL_DIR="$HOME/.claude/skills/fitness-copilot"
+LOG="$SKILL_DIR/profile/autoplan.log"
+WORKDIR="$HOME/claude/fitness-copilot"
+[ -d "$WORKDIR" ] || WORKDIR="$HOME"
+
+read -r -d '' PROMPT <<'EOF'
+Use the fitness-copilot skill to plan my NEXT training session.
+Read my profile and recent HEVY history, then pick the best next session given my
+recent training, my recomp goal, my 45-minute total time cap, my garage dumbbell
+setup, and my lower-back disc and cardiac/cholesterol constraints. Balance the
+weekly split against what I trained most recently.
+Apply PROGRESSIVE OVERLOAD: check `python3 scripts/hevy_sync.py --progress` and
+`python3 scripts/mesocycle.py --status`, then set each lift's targets to beat my
+last comparable session via double-progression, programmed to the current
+mesocycle phase (build weeks ramp volume/intensity; a deload week backs off ~40–50%).
+Render the HTML session page,
+then create it as a routine in HEVY so it's ready for my next workout.
+Check my latest readiness via `python3 scripts/health_metrics.py --summary` (Oura
+HRV, resting HR, readiness score): if HRV is trending down / resting HR up / readiness
+low, scale today down (partial deload — less volume, lower intensity); otherwise
+program normally. This is an automated, non-interactive run: do NOT ask me any
+questions. If anything is ambiguous, proceed with sensible, safe assumptions and
+note them. Finish with a one-paragraph summary.
+EOF
+
+cd "$WORKDIR" 2>/dev/null
+{
+  echo "================ nightly autoplan: $(date) ================"
+
+  # Refresh the local activity log + health metrics from all sources before planning.
+  python3 "$SKILL_DIR/scripts/telegram_ingest.py" --poll --quiet 2>/dev/null || true
+  python3 "$SKILL_DIR/scripts/activity_log.py" --sync-hevy 2>/dev/null || true
+  [ -f "$SKILL_DIR/profile/.oura_key" ] && \
+    python3 "$SKILL_DIR/scripts/oura_sync.py" --days 3 2>/dev/null || true
+  python3 "$SKILL_DIR/scripts/activity_log.py" --dedupe 2>/dev/null || true
+
+  # Gate: only plan a new workout if the previously planned one was completed
+  # (i.e. a workout was logged in HEVY since we last planned). Otherwise skip.
+  if python3 "$SKILL_DIR/scripts/autoplan_gate.py"; then
+    claude -p "$PROMPT" --permission-mode bypassPermissions --add-dir "$SKILL_DIR"
+    # Mark that we just planned, so tomorrow's gate compares against now.
+    python3 "$SKILL_DIR/scripts/autoplan_gate.py" --record
+
+    # Deliver the freshly-rendered HTML to Telegram (if configured).
+    if [ -f "$SKILL_DIR/profile/.telegram" ]; then
+      echo "--- sending to Telegram ---"
+      python3 "$SKILL_DIR/scripts/notify_telegram.py" --latest \
+        --caption "Tomorrow's workout is ready 💪 Open in HEVY or tap the file." \
+        || echo "(telegram send failed)"
+    fi
+  else
+    echo "Skipping plan: previous workout not completed yet (or HEVY unavailable)."
+  fi
+  echo "================ done: $(date) ================"
+  echo
+} >> "$LOG" 2>&1

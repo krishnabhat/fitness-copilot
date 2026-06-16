@@ -1,0 +1,19 @@
+# Personal / generated data — keep local, never commit.
+profile/profile.md
+profile/training-log.md
+profile/.hevy_key
+profile/.hevy_templates_cache.json
+profile/.telegram
+profile/*.log
+profile/.autoplan_state.json
+profile/.weekly_state
+profile/.mesocycle.json
+profile/.monthly_state
+profile/health_metrics.json
+profile/activity_log.jsonl
+profile/.telegram_offset
+profile/.oura_key
+workouts/
+plans/
+reports/
+**/__pycache__/
