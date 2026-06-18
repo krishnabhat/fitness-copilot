@@ -15,13 +15,15 @@ Offset (last processed update) is stored in profile/.telegram_offset.
 """
 
 import argparse
+import glob
 import os
 import re
+import subprocess
 import sys
 import urllib.parse
 import urllib.request
 import json
-from datetime import date
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notify_telegram   # noqa: E402  (load_creds, send_message)
@@ -41,6 +43,78 @@ BODY_PARTS = ["lower back", "upper back", "back", "neck", "shoulder", "knee",
               "hip", "ankle", "wrist", "elbow", "hamstring", "quad", "calf",
               "groin", "spine", "disc", "achilles", "foot", "leg", "thigh"]
 WORKOUT_SIGNAL = ["workout", "session", "trained", "exercised", "gym", "wod"]
+
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+WORKOUTS_DIR = os.path.expanduser("~/.claude/skills/fitness-copilot/workouts")
+PLANS_DIR = os.path.expanduser("~/.claude/skills/fitness-copilot/plans")
+COMMAND_VERBS = ["show", "send", "get me", "give me", "pull up", "see my",
+                 "what's my", "what is my", "whats my", "display", "fetch"]
+FOCUS_WORDS = ["push", "pull", "legs", "leg", "lower", "upper", "full body",
+               "strength", "cardio", "run", "hiit", "yoga", "mobility", "conditioning"]
+
+
+def is_command(low):
+    return any(v in low for v in COMMAND_VERBS)
+
+
+def _title_from_file(path):
+    name = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", os.path.basename(path)[:-5])
+    return name.replace("-", " ").strip().title() or "Workout"
+
+
+def _newest(paths):
+    return max(paths, key=os.path.getmtime) if paths else None
+
+
+def handle_command(low, creds):
+    """Answer a query like 'show me tomorrow's workout' by SENDING the rendered
+    HTML / report instead of logging. Returns True if it handled the message."""
+    # progress report / stats
+    if any(w in low for w in ["progress", "report", "stats", "how am i", "how'm i"]):
+        notify_telegram.send_message(creds, "Pulling your progress report…")
+        try:
+            subprocess.run([sys.executable, os.path.join(SCRIPTS_DIR, "progress_report.py"),
+                            "--days", "30", "--send"], timeout=180, capture_output=True)
+        except Exception:
+            notify_telegram.send_message(creds, "Couldn't generate the report just now.")
+        return True
+    # weekly plan
+    if "week" in low:
+        f = _newest(glob.glob(os.path.join(PLANS_DIR, "*.html")))
+        notify_telegram.send_document(creds, f, "🗓️ Your week ahead.") if f else \
+            notify_telegram.send_message(creds, "No weekly plan rendered yet — those generate on Fridays.")
+        return True
+    # a specific workout / session
+    if (any(w in low for w in ["workout", "session", "routine", "training", "exercise"])
+            or "today" in low or "tomorrow" in low
+            or any(fw in low for fw in FOCUS_WORDS)):
+        files = glob.glob(os.path.join(WORKOUTS_DIR, "*.html"))
+        if not files:
+            notify_telegram.send_message(creds, "No workout is rendered yet. Ask your coach "
+                "to plan one, or it'll be ready after tonight's auto-plan.")
+            return True
+        cand = files
+        focus = next((fw for fw in FOCUS_WORDS if fw in low), None)
+        if focus:
+            matched = [f for f in cand if focus.replace(" ", "-") in os.path.basename(f).lower()]
+            if matched:
+                cand = matched
+        note = None
+        if "tomorrow" in low or "today" in low:
+            when = "tomorrow" if "tomorrow" in low else "today"
+            pref = (date.today() + (timedelta(days=1) if when == "tomorrow" else timedelta(0))).isoformat()
+            dated = [f for f in cand if os.path.basename(f).startswith(pref)]
+            if dated:
+                cand = dated
+            else:
+                # No file stamped that exact day → send the latest planned session instead.
+                note = f"Nothing dated {when} specifically. Here's your latest planned session:"
+        chosen = _newest(cand)
+        if note:
+            notify_telegram.send_message(creds, note)
+        notify_telegram.send_document(creds, chosen, f"💪 {_title_from_file(chosen)}")
+        return True
+    return False
 
 OFFSET_FILE = os.path.expanduser("~/.claude/skills/fitness-copilot/profile/.telegram_offset")
 
@@ -143,6 +217,10 @@ def poll(quiet=False):
         override = text.lower().startswith(("also:", "force:"))
         clean = text.split(":", 1)[1].strip() if override else text
         low = clean.lower()
+        # Query/command (e.g. "show me tomorrow's workout") → send it, don't log.
+        if not override and is_command(low) and handle_command(low, creds):
+            logged += 1
+            continue
         atype, dist_km, dur_min = parse_activity(clean)
         is_pain = any(w in low for w in PAIN_WORDS)
         is_status = any(w in low for w in STATUS_WORDS)
