@@ -53,8 +53,32 @@ FOCUS_WORDS = ["push", "pull", "legs", "leg", "lower", "upper", "full body",
                "strength", "cardio", "run", "hiit", "yoga", "mobility", "conditioning"]
 
 
+PLAN_VERBS = ["plan", "generate", "create", "build me", "make me", "design", "give me a new"]
+
+
 def is_command(low):
     return any(v in low for v in COMMAND_VERBS)
+
+
+def is_plan_request(low):
+    # "I plan to rest" / "planning to ..." are intent statements, not requests.
+    if "plan to " in low or "planning to" in low:
+        return False
+    return any(v in low for v in PLAN_VERBS) and (
+        any(w in low for w in ["workout", "session", "day", "routine", "training"])
+        or any(fw in low for fw in FOCUS_WORDS) or "today" in low or "tomorrow" in low)
+
+
+def spawn_plan(request, creds):
+    """Kick off headless generation in the background; reply immediately."""
+    try:
+        subprocess.Popen(["/bin/zsh", os.path.join(SCRIPTS_DIR, "plan_on_demand.sh"), request],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        notify_telegram.send_message(creds, "On it. Planning that now. I'll send it here in "
+                                     "a couple of minutes. 💪")
+    except Exception:
+        notify_telegram.send_message(creds, "Couldn't start planning just now.")
 
 
 def _title_from_file(path):
@@ -219,6 +243,11 @@ def poll(quiet=False):
         low = clean.lower()
         # Query/command (e.g. "show me tomorrow's workout") → send it, don't log.
         if not override and is_command(low) and handle_command(low, creds):
+            logged += 1
+            continue
+        # Plan request (e.g. "plan me a leg day") → generate in the background, don't log.
+        if not override and is_plan_request(low):
+            spawn_plan(clean, creds)
             logged += 1
             continue
         atype, dist_km, dur_min = parse_activity(clean)
