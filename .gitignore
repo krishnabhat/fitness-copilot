@@ -3,6 +3,7 @@ profile/profile.md
 profile/training-log.md
 profile/.hevy_key
 profile/.hevy_templates_cache.json
+profile/.hevy_active_routine.json
 profile/.telegram
 profile/*.log
 profile/.autoplan_state.json

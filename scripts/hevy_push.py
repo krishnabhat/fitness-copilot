@@ -38,10 +38,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hevy_sync  # noqa: E402
 
 
-def api_post(path, payload):
+ACTIVE_FILE = os.path.expanduser(
+    "~/.claude/skills/fitness-copilot/profile/.hevy_active_routine.json")
+
+
+def load_active():
+    if os.path.exists(ACTIVE_FILE):
+        try:
+            return json.load(open(ACTIVE_FILE))
+        except Exception:
+            return {}
+    return {}
+
+
+def save_active(d):
+    with open(ACTIVE_FILE, "w") as f:
+        json.dump(d, f)
+    os.chmod(ACTIVE_FILE, 0o600)
+
+
+def extract_routine_id(resp):
+    if isinstance(resp, dict):
+        r = resp.get("routine", resp)
+        if isinstance(r, list) and r:
+            r = r[0]
+        if isinstance(r, dict):
+            return r.get("id")
+    return None
+
+
+def api_post(path, payload, method="POST"):
     url = f"{hevy_sync.API_BASE}/{path.lstrip('/')}"
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, method="POST")
+    req = urllib.request.Request(url, data=data, method=method)
     req.add_header("api-key", hevy_sync.get_api_key())
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json")
@@ -53,7 +82,9 @@ def api_post(path, payload):
         detail = e.read().decode(errors="replace")
         if e.code in (401, 403):
             sys.exit(f"ERROR: HEVY auth failed ({e.code}). Check key / Hevy Pro.")
-        sys.exit(f"ERROR: HEVY API {e.code} creating routine: {detail[:400]}")
+        if e.code == 404:
+            return None   # routine no longer exists → caller falls back to create
+        sys.exit(f"ERROR: HEVY API {e.code} on {method} {path}: {detail[:400]}")
     except urllib.error.URLError as e:
         sys.exit(f"ERROR: could not reach HEVY API ({e.reason}).")
 
@@ -191,6 +222,8 @@ def main():
                    help="resolve templates and preview the payload; do not create")
     p.add_argument("--include-warmup", action="store_true",
                    help="also add warm-up items as exercises in the routine")
+    p.add_argument("--new-routine", action="store_true",
+                   help="force-create a new routine instead of updating the rolling one")
     args = p.parse_args()
 
     raw = sys.stdin.read() if args.spec == "-" else open(args.spec).read()
@@ -259,21 +292,33 @@ def main():
         for s in skipped:
             print(f"   ✗ {s}")
 
+    active = load_active()
+    active_id = active.get("id")
+    reuse = bool(active_id) and not args.new_routine
+
     if args.dry_run:
-        print("\n--dry-run: payload preview (not sent) ---")
+        action = f"UPDATE existing routine in place (id {active_id})" if reuse \
+            else "CREATE a new routine"
+        print(f"\n--dry-run: would {action}. payload preview (not sent) ---")
         print(json.dumps(payload, indent=2))
         return
 
+    if reuse:
+        # Keep the same routine while the current plan is pending: update it in place.
+        resp = api_post(f"routines/{active_id}", payload, method="PUT")
+        if resp is not None:
+            save_active({"id": active_id, "title": title})
+            print(f"\n✓ Updated your rolling routine in HEVY (id {active_id}). "
+                  "Same routine, refreshed with this plan — no duplicate created.")
+            print("  Open HEVY → Routines → it's the same one, now showing today's session.")
+            return
+        # 404: the routine was deleted in the app → fall through and create a fresh one.
+        print("  (previous routine no longer in HEVY — creating a fresh one.)")
+
     resp = api_post("routines", payload)
-    # response shape can vary; surface id/title if present
-    rid = None
-    if isinstance(resp, dict):
-        r = resp.get("routine", resp)
-        if isinstance(r, list) and r:
-            r = r[0]
-        if isinstance(r, dict):
-            rid = r.get("id")
-    print(f"\n✓ Created routine in HEVY{f' (id {rid})' if rid else ''}.")
+    rid = extract_routine_id(resp)
+    save_active({"id": rid, "title": title})
+    print(f"\n✓ Created a new routine in HEVY{f' (id {rid})' if rid else ''}.")
     print("  Open HEVY → Routines → start it → just log the sets you actually did.")
 
 
