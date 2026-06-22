@@ -63,6 +63,8 @@ cd "$WORKDIR" 2>/dev/null
     fi
   else
     echo "Skipping plan: previous workout not completed yet (or HEVY unavailable)."
+    # Still nudge: re-send the pending workout HTML(s) (once/day guard inside).
+    python3 "$SKILL_DIR/scripts/autoplan_gate.py" --remind 2>/dev/null || true
   fi
   echo "================ done: $(date) ================"
   echo

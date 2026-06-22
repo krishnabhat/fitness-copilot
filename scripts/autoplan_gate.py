@@ -24,6 +24,7 @@ Exit codes: 0 proceed · 10 skip · 2 error (wrapper treats non-zero as "don't p
 import json
 import os
 import sys
+from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import activity_log  # noqa: E402  (canonical local log — union of all sources)
@@ -82,7 +83,49 @@ def check():
     return 10
 
 
+def remind():
+    """On a skipped (gated) night, re-send the pending workout HTML(s) to Telegram as
+    a reminder. Guarded to fire at most once per day so the failsafe runs don't spam."""
+    state = load_state()
+    if "baseline_count" not in state:
+        return
+    today = date.today().isoformat()
+    if state.get("last_remind") == today:
+        print("already reminded today; skipping.")
+        return
+    pending = int(state.get("pending", 1))
+    baseline = int(state.get("baseline_count", 0))
+    remaining = max(0, pending - (workout_count() - baseline))
+    if remaining <= 0:
+        print("no pending workouts to remind about.")
+        return
+    if not os.path.exists(os.path.expanduser(
+            "~/.claude/skills/fitness-copilot/profile/.telegram")):
+        print("telegram not configured; skipping reminder.")
+        return
+    import glob
+    import telegram_ingest
+    import notify_telegram
+    files = sorted(glob.glob(os.path.join(telegram_ingest.WORKOUTS_DIR, "*.html")),
+                   key=os.path.getmtime, reverse=True)[:remaining]
+    if not files:
+        print("no workout HTML found to send.")
+        return
+    creds = notify_telegram.load_creds()
+    notify_telegram.send_message(creds, f"⏳ Reminder: you still have {remaining} planned "
+                                 f"workout{'s' if remaining > 1 else ''} to do. "
+                                 f"Here {'they are' if remaining > 1 else 'it is'}:")
+    for f in reversed(files):   # oldest pending first
+        notify_telegram.send_document(creds, f, f"💪 {telegram_ingest._title_from_file(f)}")
+    state["last_remind"] = today
+    save_state(state)
+    print(f"reminded with {len(files)} pending workout(s).")
+
+
 def main():
+    if "--remind" in sys.argv:
+        remind()
+        return 0
     if "--record" in sys.argv:
         pending = 1
         if "--pending" in sys.argv:
