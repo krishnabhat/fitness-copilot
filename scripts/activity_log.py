@@ -206,9 +206,35 @@ def summary(days):
     print("by source:" + ", ".join(f" {k} {v}" for k, v in sorted(by_src.items(), key=lambda x: -x[1])))
 
 
+def history(days):
+    """Unified workout history across ALL sources (strength, runs, HIIT, etc.)."""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    rows = [e for e in read_all() if (e.get("date") or "") >= cutoff]
+    rows.sort(key=lambda e: ((e.get("date") or ""), (e.get("logged_at") or "")), reverse=True)
+    if not rows:
+        print(f"No activities in the last {days} days.")
+        return
+    print(f"=== Workout history — last {days} days ({len(rows)} activities, all sources) ===")
+    for e in rows:
+        extra = []
+        if e.get("distance_km"):
+            extra.append(f"{e['distance_km']} km")
+        if e.get("duration_min"):
+            extra.append(f"{int(e['duration_min'])} min")
+        tail = ("  (" + ", ".join(extra) + ")") if extra else ""
+        print(f"  {e.get('date','?')}  [{e.get('source','?')[:8]:8}] {e.get('type','?'):9} "
+              f"{e.get('title','')}{tail}")
+    by_type = {}
+    for e in rows:
+        by_type[e.get("type", "?")] = by_type.get(e.get("type", "?"), 0) + 1
+    print("  by type: " + ", ".join(f"{k} {v}" for k, v in sorted(by_type.items(), key=lambda x: -x[1])))
+
+
 def main():
     p = argparse.ArgumentParser(description="Canonical local activity log.")
     p.add_argument("--sync-hevy", action="store_true")
+    p.add_argument("--history", action="store_true", help="unified history (all sources) over --days")
     p.add_argument("--dedupe", action="store_true", help="remove cross-source duplicates")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--recent", type=int, metavar="N")
@@ -229,6 +255,8 @@ def main():
         sync_hevy(); did = True
     if args.dedupe:
         dedupe(dry_run=args.dry_run); did = True
+    if args.history:
+        history(args.days); did = True
     if args.add:
         e = {"source": args.source, "type": args.type, "title": args.title or args.type,
              "detail": args.detail}
