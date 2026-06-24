@@ -90,6 +90,18 @@ def _newest(paths):
     return max(paths, key=os.path.getmtime) if paths else None
 
 
+def _parse_days(low, default=14):
+    m = re.search(r"(\d+)\s*(day|week|month)", low)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        return n * (30 if "month" in unit else 7 if "week" in unit else 1)
+    if "month" in low:
+        return 30
+    if "week" in low:
+        return 7
+    return default
+
+
 def handle_command(low, creds):
     """Answer a query like 'show me tomorrow's workout' by SENDING the rendered
     HTML / report instead of logging. Returns True if it handled the message."""
@@ -101,6 +113,21 @@ def handle_command(low, creds):
                             "--days", "30", "--send"], timeout=180, capture_output=True)
         except Exception:
             notify_telegram.send_message(creds, "Couldn't generate the report just now.")
+        return True
+    # unified history / log (checked before "week" so "last 2 weeks" doesn't hit week-plan)
+    if "history" in low or " log" in low or low.startswith("log") or (
+            any(w in low for w in ["last", "past", "previous", "recent"])
+            and any(u in low for u in ["week", "day", "month"])):
+        days = _parse_days(low, default=14)
+        try:
+            out = subprocess.run([sys.executable, os.path.join(SCRIPTS_DIR, "activity_log.py"),
+                                  "--sync-hevy", "--history", "--days", str(days)],
+                                 timeout=60, capture_output=True, text=True).stdout
+        except Exception:
+            out = ""
+        # drop the noisy sync line; keep the history block
+        msg = "\n".join(l for l in out.splitlines() if "HEVY sync" not in l).strip()
+        notify_telegram.send_message(creds, msg[:4000] or "No history found.")
         return True
     # weekly plan
     if "week" in low:

@@ -276,7 +276,6 @@ def main():
 
     payload = {"routine": {
         "title": title,
-        "folder_id": None,
         "notes": routine_notes,
         "exercises": routine_exercises,
     }}
