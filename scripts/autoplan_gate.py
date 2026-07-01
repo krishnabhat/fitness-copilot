@@ -2,20 +2,21 @@
 """
 autoplan_gate.py — decide whether the nightly auto-planner should plan a new
 workout. Goal: never let unstarted routines pile up. Only plan once the athlete
-has logged enough new workouts in HEVY to have cleared everything we've queued.
+has logged enough new activities to have cleared everything we've queued.
 
-Count-based logic (robust to multiple pending routines):
-  state = { "baseline_count": N, "pending": K }
-  - At plan time we record baseline_count = total HEVY workouts then, and
-    pending = how many routines are now queued and unstarted.
-  - The gate proceeds only when (current_count - baseline_count) >= pending,
-    i.e. the athlete has logged at least `pending` new workouts since we planned.
-  Otherwise it skips, leaving the queued routine(s) in place.
+Watermark logic (robust to log dedupe/pruning — a mutable total count is not):
+  state = { "last_plan_at": ISO8601-UTC, "pending": K }
+  - At plan time we stamp last_plan_at = now and pending = how many routines are
+    queued and unstarted.
+  - The gate proceeds only when the athlete has logged >= pending activities whose
+    logged_at is AFTER last_plan_at. Counting forward from a timestamp can't go
+    negative when old rows are de-duped away (the old count-baseline could).
 
 Usage:
   python3 autoplan_gate.py                 # check: exit 0 = plan now, 10 = skip
   python3 autoplan_gate.py --record        # mark: just planned 1 routine
   python3 autoplan_gate.py --record --pending N   # mark: N routines now queued
+  python3 autoplan_gate.py --remind        # re-send pending workout(s) (once/day)
 
 State: ~/.claude/skills/fitness-copilot/profile/.autoplan_state.json
 Exit codes: 0 proceed · 10 skip · 2 error (wrapper treats non-zero as "don't plan").
@@ -24,7 +25,7 @@ Exit codes: 0 proceed · 10 skip · 2 error (wrapper treats non-zero as "don't p
 import json
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import activity_log  # noqa: E402  (canonical local log — union of all sources)
@@ -50,36 +51,43 @@ def save_state(state):
     os.chmod(STATE_FILE, 0o600)
 
 
-def workout_count():
-    # Count from the canonical local log (union of HEVY + Telegram + manual + ...),
-    # so activities logged via any source count as "trained". The nightly wrapper
-    # runs `activity_log.py --sync-hevy` first to mirror HEVY into the log.
-    return activity_log.count()
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def done_since(state):
+    """How many activities have been logged since the last plan.
+    Returns None if there's no plan on record yet (first run)."""
+    if state.get("last_plan_at"):
+        return activity_log.count_since(state["last_plan_at"])
+    # Legacy fallback for pre-watermark state; migrates to last_plan_at on next --record.
+    if "baseline_count" in state:
+        return max(0, activity_log.count() - int(state["baseline_count"]))
+    return None
 
 
 def record(pending):
     state = load_state()
-    state["baseline_count"] = workout_count()
+    state["last_plan_at"] = _now_iso()
     state["pending"] = max(1, int(pending))
+    state.pop("baseline_count", None)   # retire the count-based baseline
     save_state(state)
-    print(f"recorded baseline_count={state.get('baseline_count')} pending={state['pending']}")
+    print(f"recorded last_plan_at={state['last_plan_at']} pending={state['pending']}")
 
 
 def check():
     state = load_state()
-    if "baseline_count" not in state:
-        print("No baseline on record → proceeding (first run).")
+    d = done_since(state)
+    if d is None:
+        print("No prior plan on record → proceeding (first run).")
         return 0
-    current = workout_count()
-    baseline = int(state.get("baseline_count", 0))
     pending = int(state.get("pending", 1))
-    done = current - baseline
-    if done >= pending:
-        print(f"{done} workout(s) logged since last plan (needed {pending}) → "
-              f"queue cleared, planning next.")
+    if d >= pending:
+        print(f"{d} activity(ies) logged since last plan (needed {pending}) → "
+              "queue cleared, planning next.")
         return 0
-    print(f"Only {done} of {pending} queued workout(s) completed since last plan "
-          f"(HEVY total {current}, baseline {baseline}) → not planning, leaving queue in place.")
+    print(f"Only {d} of {pending} queued workout(s) completed since last plan "
+          "→ not planning, leaving queue in place.")
     return 10
 
 
@@ -87,15 +95,15 @@ def remind():
     """On a skipped (gated) night, re-send the pending workout HTML(s) to Telegram as
     a reminder. Guarded to fire at most once per day so the failsafe runs don't spam."""
     state = load_state()
-    if "baseline_count" not in state:
+    d = done_since(state)
+    if d is None:
         return
     today = date.today().isoformat()
     if state.get("last_remind") == today:
         print("already reminded today; skipping.")
         return
     pending = int(state.get("pending", 1))
-    baseline = int(state.get("baseline_count", 0))
-    remaining = max(0, pending - (workout_count() - baseline))
+    remaining = max(0, pending - d)
     if remaining <= 0:
         print("no pending workouts to remind about.")
         return

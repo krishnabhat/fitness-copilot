@@ -13,6 +13,16 @@ LOG="$SKILL_DIR/profile/autoplan.log"
 WORKDIR="$HOME/claude/fitness-copilot"
 [ -d "$WORKDIR" ] || WORKDIR="$HOME"
 
+# Atomic lock so overlapping failsafe runs (or a slow prior run) don't double-plan.
+# mkdir is atomic; reclaim a stale lock older than 2h (a crashed prior run).
+LOCKDIR="$SKILL_DIR/profile/.autoplan.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  _age=$(( $(date +%s) - $(stat -f %m "$LOCKDIR" 2>/dev/null || echo 0) ))
+  if [ "$_age" -gt 7200 ]; then rmdir "$LOCKDIR" 2>/dev/null; mkdir "$LOCKDIR" 2>/dev/null || exit 0
+  else echo "$(date): autoplan already running; exiting." >> "$LOG"; exit 0; fi
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT
+
 read -r -d '' PROMPT <<'EOF'
 Use the fitness-copilot skill to plan my NEXT training session.
 Read my profile and recent HEVY history, then pick the best next session given my
@@ -51,15 +61,19 @@ cd "$WORKDIR" 2>/dev/null
   # (i.e. a workout was logged in HEVY since we last planned). Otherwise skip.
   if python3 "$SKILL_DIR/scripts/autoplan_gate.py"; then
     claude -p "$PROMPT" --permission-mode bypassPermissions --add-dir "$SKILL_DIR"
-    # Mark that we just planned, so tomorrow's gate compares against now.
-    python3 "$SKILL_DIR/scripts/autoplan_gate.py" --record
-
-    # Deliver the freshly-rendered HTML to Telegram (if configured).
-    if [ -f "$SKILL_DIR/profile/.telegram" ]; then
-      echo "--- sending to Telegram ---"
-      python3 "$SKILL_DIR/scripts/notify_telegram.py" --latest \
-        --caption "Tomorrow's workout is ready 💪 Open in HEVY or tap the file." \
-        || echo "(telegram send failed)"
+    _RC=$?
+    # Only record the plan + deliver if the planning run actually succeeded. Recording
+    # on failure would make the gate think we planned and skip the retry next run.
+    if [ "$_RC" -eq 0 ]; then
+      python3 "$SKILL_DIR/scripts/autoplan_gate.py" --record
+      if [ -f "$SKILL_DIR/profile/.telegram" ]; then
+        echo "--- sending to Telegram ---"
+        python3 "$SKILL_DIR/scripts/notify_telegram.py" --latest \
+          --caption "Tomorrow's workout is ready 💪 Open in HEVY or tap the file." \
+          || echo "(telegram send failed)"
+      fi
+    else
+      echo "Planning run failed (claude exit $_RC) — NOT recording; will retry next run."
     fi
   else
     echo "Skipping plan: previous workout not completed yet (or HEVY unavailable)."

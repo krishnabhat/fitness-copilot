@@ -40,10 +40,20 @@ if [ -f "$WEEKLY_STATE" ] && [ "$(cat "$WEEKLY_STATE" 2>/dev/null)" = "$THIS_WEE
   exit 0
 fi
 
+# Atomic lock so overlapping failsafe runs don't both send (reclaim if stale >2h).
+LOCKDIR="$SKILL_DIR/profile/.weekly.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  _age=$(( $(date +%s) - $(stat -f %m "$LOCKDIR" 2>/dev/null || echo 0) ))
+  if [ "$_age" -gt 7200 ]; then rmdir "$LOCKDIR" 2>/dev/null; mkdir "$LOCKDIR" 2>/dev/null || exit 0
+  else echo "$(date): weekly already running; exiting." >> "$LOG"; exit 0; fi
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT
+
 cd "$WORKDIR" 2>/dev/null
 {
   echo "================ weekly plan: $(date) ================"
   claude -p "$PROMPT" --permission-mode bypassPermissions --add-dir "$SKILL_DIR"
+  _RC=$?
 
   if [ -f "$SKILL_DIR/profile/.telegram" ]; then
     LATEST=$(ls -t "$SKILL_DIR"/plans/*.html 2>/dev/null | head -1)
@@ -56,9 +66,13 @@ cd "$WORKDIR" 2>/dev/null
       echo "(no weekly HTML found to send)"
     fi
   fi
-  # Mark this ISO week as done so failsafe re-runs don't resend.
-  echo "$THIS_WEEK" > "$WEEKLY_STATE"
-  chmod 600 "$WEEKLY_STATE" 2>/dev/null
+  # Mark the ISO week done ONLY on success — else a later failsafe run retries this week.
+  if [ "$_RC" -eq 0 ]; then
+    echo "$THIS_WEEK" > "$WEEKLY_STATE"
+    chmod 600 "$WEEKLY_STATE" 2>/dev/null
+  else
+    echo "Weekly run failed (claude exit $_RC) — not marking week done; will retry."
+  fi
   echo "================ done: $(date) ================"
   echo
 } >> "$LOG" 2>&1

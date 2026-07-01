@@ -18,6 +18,15 @@ if [ -f "$MONTHLY_STATE" ] && [ "$(cat "$MONTHLY_STATE" 2>/dev/null)" = "$THIS_M
   exit 0
 fi
 
+# Atomic lock so overlapping failsafe runs don't both send (reclaim if stale >2h).
+LOCKDIR="$SKILL_DIR/profile/.monthly.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  _age=$(( $(date +%s) - $(stat -f %m "$LOCKDIR" 2>/dev/null || echo 0) ))
+  if [ "$_age" -gt 7200 ]; then rmdir "$LOCKDIR" 2>/dev/null; mkdir "$LOCKDIR" 2>/dev/null || exit 0
+  else echo "$(date): monthly already running; exiting." >> "$LOG"; exit 0; fi
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT
+
 read -r -d '' PROMPT <<'EOF'
 Use the fitness-copilot skill to produce my MONTHLY progress report. First run
 `python3 scripts/progress_report.py --days 30` to compute my stats (strength PRs and
@@ -44,8 +53,14 @@ cd "$WORKDIR" 2>/dev/null
     python3 "$SKILL_DIR/scripts/progress_report.py" --days 30 --send || echo "(fallback failed)"
   fi
 
-  echo "$THIS_MONTH" > "$MONTHLY_STATE"
-  chmod 600 "$MONTHLY_STATE" 2>/dev/null
+  # Mark the month done ONLY if a report was actually produced today — otherwise a
+  # later failsafe run (or the Day-2 catch-up) retries instead of silently skipping.
+  if [ -f "$SKILL_DIR/reports/$TODAY-progress.html" ]; then
+    echo "$THIS_MONTH" > "$MONTHLY_STATE"
+    chmod 600 "$MONTHLY_STATE" 2>/dev/null
+  else
+    echo "No report produced — not marking month done; will retry on the next fire."
+  fi
   echo "================ done: $(date) ================"
   echo
 } >> "$LOG" 2>&1

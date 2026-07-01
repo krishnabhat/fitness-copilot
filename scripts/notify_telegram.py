@@ -115,16 +115,26 @@ def setup(token):
     res = tg_get(token, "getUpdates")
     if not res.get("ok"):
         sys.exit(f"ERROR: token rejected by Telegram: {res}")
+    # Bind ONLY to a private (1:1) chat. Binding to the "most recent chat" could
+    # latch onto a group the bot was added to — then everyone in that group receives
+    # your plans and can drive the bot. Require a private DM.
     chat_id = None
+    saw_group = False
     for upd in reversed(res.get("result", [])):
         msg = upd.get("message") or upd.get("edited_message") or {}
         chat = msg.get("chat") or {}
-        if chat.get("id") is not None:
+        if chat.get("id") is None:
+            continue
+        if chat.get("type") == "private":
             chat_id = chat["id"]
             break
+        saw_group = True
     if chat_id is None:
-        sys.exit("ERROR: no chat found. Open your bot in Telegram, send it a message "
-                 "(e.g. 'hi'), then re-run --setup.")
+        if saw_group:
+            sys.exit("ERROR: only saw group chats. Message the bot in a DIRECT (1:1) chat, "
+                     "not a group, then re-run --setup.")
+        sys.exit("ERROR: no chat found. Open your bot in Telegram and send it a direct "
+                 "message (e.g. 'hi'), then re-run --setup.")
     with open(CRED_FILE, "w") as f:
         json.dump({"token": token, "chat_id": str(chat_id)}, f)
     os.chmod(CRED_FILE, 0o600)

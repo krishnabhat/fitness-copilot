@@ -23,7 +23,7 @@ import sys
 import urllib.parse
 import urllib.request
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notify_telegram   # noqa: E402  (load_creds, send_message)
@@ -276,23 +276,68 @@ def poll(quiet=False):
         override = text.lower().startswith(("also:", "force:"))
         clean = text.split(":", 1)[1].strip() if override else text
         low = clean.lower()
-        # Query/command (e.g. "show me tomorrow's workout") → send it, don't log.
-        if not override and is_command(low) and handle_command(low, creds):
-            logged += 1
-            continue
-        # Plan request (e.g. "plan me a leg day") → generate in the background, don't log.
-        if not override and is_plan_request(low):
-            spawn_plan(clean, creds)
-            logged += 1
-            continue
+
+        # Use the message's OWN timestamp for the log date, not poll time. A text sent
+        # at 11:58pm but polled after midnight (or a wake-from-sleep catch-up) must not
+        # land on the wrong day and skew recency/gating/recovery logic.
+        _ts = msg.get("date")
+        msg_day = (datetime.fromtimestamp(_ts, tz=timezone.utc).astimezone().date().isoformat()
+                   if _ts else date.today().isoformat())
+
+        # Intent flags computed up front.
         atype, dist_km, dur_min = parse_activity(clean)
         is_pain = any(w in low for w in PAIN_WORDS)
         is_recovery = any(w in low for w in RECOVERY_WORDS)
         has_fever = "fever" in low or "feverish" in low
         is_status = is_recovery or any(w in low for w in STATUS_WORDS)
         red_flag = any(w in low for w in RED_FLAG_WORDS)
-        # A "strong" workout signal can't be a false positive from ambiguous words
-        # like "lower"/"leg" (which appear in "lower back"/"my leg hurts").
+        part = next((b for b in BODY_PARTS if b in low), None)
+
+        # Persist a pain/status note FIRST — so a mixed-intent message like
+        # "plan me a workout, my knee hurts" never loses the constraint to the plan path.
+        note_ack = None
+        if is_pain or is_status:
+            notes.append_note(clean, kind="pain" if (is_pain and not is_recovery) else "status",
+                              red_flag=red_flag or has_fever, when=msg_day)
+            logged += 1
+            if red_flag:
+                note_ack = ("⚠️ Noted — that can be serious. If it's sharp, radiating, numb, "
+                    "or comes with chest pain/dizziness, please STOP and see a clinician. "
+                    "I'll keep training off that area until you're cleared.")
+            elif is_recovery:
+                note_ack = ("Great to hear you're back 💪 I'll resume normal programming — "
+                    "your next session returns to your regular plan, easing in moderate-first.")
+            elif is_pain:
+                note_ack = (f"Got it — noted your {part or 'pain'}. I'll program around it next "
+                    "session (avoid loading that area). Tell me if it turns sharp or radiates.")
+            elif has_fever:
+                note_ack = ("Noted. With a fever, rest fully — no training until it's gone, then "
+                    "ease back in (no HIIT/heavy right away). I'll keep sessions held until you're clear.")
+            else:
+                note_ack = ("Noted — I'll keep your next session easy while you recover. "
+                    "Text me when you're feeling better and I'll resume as normal.")
+
+        # Query/command (e.g. "show me tomorrow's workout") → send it. Note already stored above.
+        if not override and is_command(low) and handle_command(low, creds):
+            if note_ack:
+                try:
+                    notify_telegram.send_message(creds, note_ack)
+                except Exception:
+                    pass
+            logged += 1
+            continue
+        # Plan request (e.g. "plan me a leg day") → generate in the background. Note stored above.
+        if not override and is_plan_request(low):
+            spawn_plan(clean, creds)
+            if note_ack:
+                try:
+                    notify_telegram.send_message(creds, note_ack)
+                except Exception:
+                    pass
+            logged += 1
+            continue
+
+        # Not a command/plan → handle activity logging and assemble the reply.
         strong_workout = (bool(dist_km) or bool(dur_min)
                           or atype in ("run", "bike", "walk", "swim", "yoga", "hiit")
                           or any(w in low for w in WORKOUT_SIGNAL))
@@ -300,45 +345,20 @@ def poll(quiet=False):
         # "my lower back is tight" doesn't get mis-logged as a strength session).
         has_workout = strong_workout if (is_pain or is_status) else (
             (atype != "other") or dist_km or dur_min or any(w in low for w in WORKOUT_SIGNAL))
-        part = next((b for b in BODY_PARTS if b in low), None)
+
         reply_bits = []
+        if note_ack:
+            reply_bits.append(note_ack)
 
-        # 1) Pain / status note → constraints store (NEVER counts as a workout).
-        if is_pain or is_status:
-            notes.append_note(clean, kind="pain" if (is_pain and not is_recovery) else "status",
-                              red_flag=red_flag or has_fever)
-            logged += 1
-            if red_flag:
-                reply_bits.append("⚠️ Noted — that can be serious. If it's sharp, "
-                    "radiating, numb, or comes with chest pain/dizziness, please STOP "
-                    "and see a clinician. I'll keep training off that area until you're cleared.")
-            elif is_recovery:
-                reply_bits.append("Great to hear you're back 💪 I'll resume normal "
-                    "programming — your next session returns to your regular plan. "
-                    "I'll ease you in (moderate first), not straight to the hardest.")
-            elif is_pain:
-                reply_bits.append(f"Got it — noted your {part or 'pain'}. I'll program "
-                    "around it next session (avoid loading that area). Tell me if it "
-                    "turns sharp or radiates.")
-            elif has_fever:
-                reply_bits.append("Noted. With a fever, rest fully — no training until it's "
-                    "gone, then ease back in (no HIIT/heavy right away). I'll "
-                    "keep sessions easy/held until you tell me you're clear.")
-            else:
-                reply_bits.append("Noted — I'll keep your next session easy while you "
-                    "recover. Text me when you're feeling better and I'll resume as normal.")
-
-        # 2) Activity (with cross-source duplicate guard).
         if has_workout:
-            today = date.today().isoformat()
             dup = (not override) and any(
-                e.get("date") == today and e.get("type") == atype
+                e.get("date") == msg_day and e.get("type") == atype
                 for e in activity_log.read_all())
             if dup:
                 reply_bits.append(f"(a '{atype}' is already logged today — not "
                     "double-counting; text 'also: …' to force a separate one.)")
             else:
-                entry = {"source": "telegram", "type": atype,
+                entry = {"source": "telegram", "type": atype, "date": msg_day,
                          "title": clean[:80], "detail": clean[:300]}
                 if dist_km:
                     entry["distance_km"] = dist_km
@@ -348,16 +368,17 @@ def poll(quiet=False):
                 logged += 1
                 reply_bits.append(confirm_text(atype, dist_km, dur_min, hevy_units_lb()))
 
-        # 3) Neither → keep as a general note (nothing lost, no workout inflation).
+        # Neither pain/status nor workout → keep as a general note (nothing lost).
         if not (is_pain or is_status) and not has_workout:
-            notes.append_note(clean, kind="note")
+            notes.append_note(clean, kind="note", when=msg_day)
             logged += 1
             reply_bits.append("Noted ✓")
 
-        try:
-            notify_telegram.send_message(creds, " ".join(reply_bits))
-        except Exception:
-            pass
+        if reply_bits:
+            try:
+                notify_telegram.send_message(creds, " ".join(reply_bits))
+            except Exception:
+                pass
 
     if last_update > offset:
         save_offset(last_update)
