@@ -35,7 +35,15 @@ PAIN_WORDS = ["pain", "hurt", "sore", "soreness", "ache", "aching", "tweak",
               "pulled", "spasm", "cramp", "throb"]
 STATUS_WORDS = ["tired", "exhausted", "fatigued", "didn't sleep", "didnt sleep",
                 "stressed", "sick", "ill", "flu", "run down", "rundown",
-                "low energy", "drained", "burnt out", "burned out", "wiped"]
+                "low energy", "drained", "burnt out", "burned out", "wiped",
+                # illness / under-the-weather
+                "cold", "cough", "congested", "congestion", "sinus", "sore throat",
+                "throat", "headache", "migraine", "nausea", "nauseous", "chills",
+                "under the weather", "achy", "fever", "feverish", "sniffles", "runny nose"]
+RECOVERY_WORDS = ["recovered", "recovering", "feeling better", "better now", "back to normal",
+                  "all better", "on the mend", "over the cold", "over it", "fully recovered",
+                  "feeling good again", "back to full", "much better", "back to normal now",
+                  "cold is gone", "feel great again"]
 RED_FLAG_WORDS = ["sharp", "radiating", "shooting", "numb", "tingl", "chest pain",
                   "can't move", "cant move", "severe", "dizzy", "faint",
                   "short of breath", "shortness of breath"]
@@ -279,7 +287,9 @@ def poll(quiet=False):
             continue
         atype, dist_km, dur_min = parse_activity(clean)
         is_pain = any(w in low for w in PAIN_WORDS)
-        is_status = any(w in low for w in STATUS_WORDS)
+        is_recovery = any(w in low for w in RECOVERY_WORDS)
+        has_fever = "fever" in low or "feverish" in low
+        is_status = is_recovery or any(w in low for w in STATUS_WORDS)
         red_flag = any(w in low for w in RED_FLAG_WORDS)
         # A "strong" workout signal can't be a false positive from ambiguous words
         # like "lower"/"leg" (which appear in "lower back"/"my leg hurts").
@@ -295,19 +305,28 @@ def poll(quiet=False):
 
         # 1) Pain / status note → constraints store (NEVER counts as a workout).
         if is_pain or is_status:
-            notes.append_note(clean, kind="pain" if is_pain else "status", red_flag=red_flag)
+            notes.append_note(clean, kind="pain" if (is_pain and not is_recovery) else "status",
+                              red_flag=red_flag or has_fever)
             logged += 1
             if red_flag:
                 reply_bits.append("⚠️ Noted — that can be serious. If it's sharp, "
                     "radiating, numb, or comes with chest pain/dizziness, please STOP "
                     "and see a clinician. I'll keep training off that area until you're cleared.")
+            elif is_recovery:
+                reply_bits.append("Great to hear you're back 💪 I'll resume normal "
+                    "programming — your next session returns to your regular plan. "
+                    "I'll ease you in (moderate first), not straight to the hardest.")
             elif is_pain:
                 reply_bits.append(f"Got it — noted your {part or 'pain'}. I'll program "
                     "around it next session (avoid loading that area). Tell me if it "
                     "turns sharp or radiates.")
+            elif has_fever:
+                reply_bits.append("Noted. With a fever, rest fully — no training until it's "
+                    "gone (and no HIIT/heavy right after, given your heart history). I'll "
+                    "keep sessions easy/held until you tell me you're clear.")
             else:
-                reply_bits.append("Noted — I'll factor that into your next plan "
-                    "(lighter if you're run down).")
+                reply_bits.append("Noted — I'll keep your next session easy while you "
+                    "recover. Text me when you're feeling better and I'll resume as normal.")
 
         # 2) Activity (with cross-source duplicate guard).
         if has_workout:
