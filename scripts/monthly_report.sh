@@ -24,7 +24,7 @@ Use the fitness-copilot skill to produce my MONTHLY progress report. First run
 est-1RM trends, total volume, training frequency/adherence, cardio distance & best
 pace, sets per muscle) and review which health metrics are due. Then write a concise,
 motivating coach's summary: 2–4 wins, anything sliding, and the focus for next month
-tied to my recomp goal and current mesocycle phase. Deliver it by running
+tied to my goals and current mesocycle phase. Deliver it by running
 `python3 scripts/progress_report.py --days 30 --send --note "<your summary>"`.
 Also clearly remind me of any metrics due for re-measurement (VO2max, DEXA body comp,
 resting HR, blood pressure, bloodwork, 1-mile time) and briefly suggest how to capture

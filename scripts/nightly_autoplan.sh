@@ -16,8 +16,8 @@ WORKDIR="$HOME/claude/fitness-copilot"
 read -r -d '' PROMPT <<'EOF'
 Use the fitness-copilot skill to plan my NEXT training session.
 Read my profile and recent HEVY history, then pick the best next session given my
-recent training, my recomp goal, my 45-minute total time cap, my garage dumbbell
-setup, and my lower-back disc and cardiac/cholesterol constraints. Balance the
+recent training, my goals, the time and equipment I have available, and any
+injuries or health constraints noted in my profile. Balance the
 weekly split against what I trained most recently.
 Apply PROGRESSIVE OVERLOAD: check `python3 scripts/hevy_sync.py --progress` and
 `python3 scripts/mesocycle.py --status`, then set each lift's targets to beat my

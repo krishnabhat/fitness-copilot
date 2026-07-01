@@ -322,7 +322,7 @@ def poll(quiet=False):
                     "turns sharp or radiates.")
             elif has_fever:
                 reply_bits.append("Noted. With a fever, rest fully — no training until it's "
-                    "gone (and no HIIT/heavy right after, given your heart history). I'll "
+                    "gone, then ease back in (no HIIT/heavy right away). I'll "
                     "keep sessions easy/held until you tell me you're clear.")
             else:
                 reply_bits.append("Noted — I'll keep your next session easy while you "

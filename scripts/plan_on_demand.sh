@@ -14,7 +14,7 @@ WORKDIR="$HOME/claude/fitness-copilot"
 # Note: "$REQUEST" is only ever used quoted; the shell does not re-evaluate the
 # value of a variable, so request text containing $(...) or backticks is inert.
 REQUEST="$1"
-PROMPT="Use the fitness-copilot skill to plan a workout based on this request from me: \"$REQUEST\". Read my profile, recent training history (activity_log + HEVY), my latest readiness (health_metrics --summary) and recent pain/status notes (notes.py --recent 7). Honor the requested focus and/or day. Respect my constraints (45-minute cap unless I asked otherwise, garage dumbbells, lower-back disc, cardiac/cholesterol) and apply progressive overload. Render the HTML session page and push it to HEVY as a routine. Non-interactive: do not ask questions; proceed with safe, sensible assumptions and note them. End with a one-line summary."
+PROMPT="Use the fitness-copilot skill to plan a workout based on this request from me: \"$REQUEST\". Read my profile, recent training history (activity_log + HEVY), my latest readiness (health_metrics --summary) and recent pain/status notes (notes.py --recent 7). Honor the requested focus and/or day. Respect my profile (goals, available time and equipment, and any injuries/health constraints noted there) and apply progressive overload. Render the HTML session page and push it to HEVY as a routine. Non-interactive: do not ask questions; proceed with safe, sensible assumptions and note them. End with a one-line summary."
 
 cd "$WORKDIR" 2>/dev/null
 {

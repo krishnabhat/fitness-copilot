@@ -14,12 +14,12 @@ WORKDIR="$HOME/claude/fitness-copilot"
 read -r -d '' PROMPT <<'EOF'
 Use the fitness-copilot skill to create a WEEKLY training plan for the upcoming
 week (Monday through Sunday). Read my profile and recent HEVY history, then lay
-out a balanced 5–6 day split for my recomp goal: pick a sensible focus for each
-day (strength/push/pull/lower, Zone-2 cardio on hills or bike, optional HIIT,
+out a balanced split for my goals: pick a sensible focus for each
+day (strength/push/pull/lower, Zone-2 cardio, optional HIIT,
 mobility/yoga, and rest days). For HIIT days, VARY the modality — it does not have
 to be running or biking; a dumbbell/bodyweight metcon (EMOM, complex, Tabata, AMRAP)
-is great too — keep it spine-safe and heart-smart. Respect my 45-minute cap, garage dumbbell setup,
-and my lower-back disc and cardiac/cholesterol constraints. Balance weekly volume
+is great too — keep it safe for any injuries/health flags in my profile. Respect the time and equipment I have,
+and any health constraints in my profile. Balance weekly volume
 across movement patterns and don't stack hard lower-body + HIIT + long cardio on
 back-to-back days. Reflect my current periodization phase
 (`python3 scripts/mesocycle.py --status`) — e.g. if a deload week falls here, make it
