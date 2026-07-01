@@ -32,17 +32,36 @@ Fitness Copilot is coaching decision-support, **not** medical advice and **not**
 - **Python 3** (standard library only — no `pip install`).
 - Optional integrations: **Hevy Pro** (workout read/write), **Oura** (recovery metrics), **Telegram bot** (delivery + text logging), **Apple Health** (history import).
 
+## Demo
+
+<!-- TODO: add screenshots/GIFs before public launch -->
+> _[screenshot: an HTML workout session — warm-up, sets/reps/rest, per-exercise video links]_
+> _[screenshot: the Telegram bot — "plan me a leg day" → a session lands on your phone]_
+> _[gif: texting "my back is tight" and the next plan adapting]_
+
 ## Install
 
 ```bash
-# 1. Put the skill where Claude Code finds it
-git clone <your-repo-url> ~/.claude/skills/fitness-copilot
+# 1. Put the skill where Claude Code finds it (this exact path)
+git clone https://github.com/krishnabhat/fitness-copilot ~/.claude/skills/fitness-copilot
 
-# 2. (Optional) set up the automated nightly/weekly/monthly jobs + Telegram ingest
-cd ~/.claude/skills/fitness-copilot && ./install.sh
+# 2. Check your setup (read-only; tells you what's ready and what's missing)
+cd ~/.claude/skills/fitness-copilot && ./doctor.sh
+
+# 3. (Optional, macOS) enable the nightly/weekly/monthly autopilot + Telegram ingest
+./install.sh
 ```
 
-Then open Claude Code and say **"set up my fitness profile"** or **"plan my workout today."** On first run it interviews you (goals, equipment, schedule, injuries, etc.) and saves a private, gitignored profile.
+## First run — a 2-minute conversation, not a form
+
+Open Claude Code and say **"set up my fitness profile"** (or just **"plan my workout today"**). Since you have no profile yet, the coach runs a short, friendly interview — asked in small batches, not a wall of fields:
+
+- name + primary goal and timeline
+- days/week, session length, where you train + equipment
+- injuries, conditions, recent labs, whether you're cleared for vigorous exercise
+- nutrition style, and whether you use HEVY / Oura / Telegram
+
+Your answers are saved to a **private, gitignored `profile.md`** on your machine. From then on, every plan is built around *your* body — nothing personal ever leaves your computer or lands in the repo.
 
 ### Connect your data (all optional)
 - **HEVY** (`profile/.hevy_key`): hevy.com → Settings → Developer/API (needs Hevy Pro)
