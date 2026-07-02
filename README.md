@@ -6,6 +6,8 @@ Fitness Copilot is a [Claude Code](https://claude.com/claude-code) skill that de
 
 It's not a static plan. It's a coach that adapts every day.
 
+> ⭐ **If this is useful, star the repo — it helps other people find it.**
+
 ---
 
 ## What it does
