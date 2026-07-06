@@ -104,16 +104,35 @@ def parse_int_reps(reps):
 
 
 def parse_weight_kg(load):
-    """'102.5kg / RPE 8' -> 102.5 ; '2x20kg DB' -> 20.0 ; 'RPE 8' -> None."""
+    """'102.5kg / RPE 8' -> 102.5 ; '2x20kg DB' -> 20.0 ; 'RPE 8' -> None.
+    Keep FULL precision on the lb→kg conversion — rounding kg to 1 decimal made HEVY
+    display ugly weights (35 lb became 15.9 kg → 35.05 lb). clean_kg_for_units() then
+    snaps to a clean value in the athlete's preferred unit."""
     if not load:
         return None
     m = re.search(r"([\d.]+)\s*kg", str(load), re.IGNORECASE)
     if m:
-        return float(m.group(1))
+        return round(float(m.group(1)), 5)
     m = re.search(r"([\d.]+)\s*lb", str(load), re.IGNORECASE)
     if m:
-        return round(float(m.group(1)) / 2.20462, 1)
+        return round(float(m.group(1)) / 2.20462, 5)
     return None
+
+
+def clean_kg_for_units(kg):
+    """Snap a kg weight so it shows as a CLEAN number in the athlete's preferred unit.
+    lb preference → snap to the nearest 0.5 lb and store the exact kg for it (so HEVY,
+    set to lb, shows e.g. 35 not 35.05). kg preference → snap to nearest 0.5 kg."""
+    if kg is None:
+        return None
+    try:
+        prefer_lb = hevy_sync.detect_units() == "lb"
+    except Exception:
+        prefer_lb = False
+    if prefer_lb:
+        lb = round(kg * 2.20462 * 2) / 2          # nearest 0.5 lb
+        return round(lb / 2.20462, 5)             # exact kg for that clean lb
+    return round(kg * 2) / 2                       # nearest 0.5 kg
 
 
 def parse_rpe(load):
@@ -168,7 +187,7 @@ def make_sets(ex):
         n = 1
     n = max(1, n)
     reps = parse_int_reps(ex.get("reps"))
-    weight = parse_weight_kg(ex.get("load"))
+    weight = clean_kg_for_units(parse_weight_kg(ex.get("load")))
     # NB: HEVY's routine endpoint does NOT accept an `rpe` field on sets (that's a
     # logged-workout field). RPE targets are carried in the exercise notes instead.
     one = {
