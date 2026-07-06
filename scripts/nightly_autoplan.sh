@@ -38,8 +38,10 @@ then create it as a routine in HEVY so it's ready for my next workout.
 Check my latest readiness via `python3 scripts/health_metrics.py --summary` (Oura
 HRV, resting HR, readiness score): if HRV is trending down / resting HR up / readiness
 low, scale today down (partial deload — less volume, lower intensity); otherwise
-program normally. ALSO run `python3 scripts/notes.py --recent 7` and respect any pain/
-injury/status I reported: program around a sore/injured area (avoid loading it, swap to
+program normally. Check `python3 scripts/injuries.py --status` for any tracked injury and
+its daily 1-10 trend: program around it, progressively reintroduce load as severity drops,
+and return that area to normal once it resolves. ALSO run `python3 scripts/notes.py --recent 7`
+and respect any pain/injury/status I reported: program around a sore/injured area (avoid loading it, swap to
 pain-free movements), go lighter if I'm run down, and if anything is flagged red
 (sharp/radiating pain, numbness, chest pain) do NOT load that area — note it and advise care. This is an automated, non-interactive run: do NOT ask me any
 questions. If anything is ambiguous, proceed with sensible, safe assumptions and

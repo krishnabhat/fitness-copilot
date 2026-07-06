@@ -6,3 +6,4 @@ training-log.md
 *.local.md
 *.log
 .telegram
+.injuries.json

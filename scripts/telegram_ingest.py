@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import notify_telegram   # noqa: E402  (load_creds, send_message)
 import activity_log      # noqa: E402
 import notes             # noqa: E402
+import injuries          # noqa: E402  (proactive daily injury check-ins)
 
 PAIN_WORDS = ["pain", "hurt", "sore", "soreness", "ache", "aching", "tweak",
               "stiff", "strain", "sprain", "injured", "injury", "tight",
@@ -66,6 +67,26 @@ PLAN_VERBS = ["plan", "generate", "create", "build me", "make me", "design", "gi
 
 def is_command(low):
     return any(v in low for v in COMMAND_VERBS)
+
+
+def parse_severity_reply(clean, low):
+    """Interpret a daily-checkin reply as a 1-10 severity. Returns (part_or_None, sev)
+    or None. Only meaningful when an injury is being tracked (caller gates on that)."""
+    # Not a severity if it looks like a logged activity (distance/duration).
+    if re.search(r"\d+\s*(km|k\b|mi|mile|miles|min|mins|minute|hr|hour|m\b)", low):
+        return None
+    part = next((b for b in BODY_PARTS if b in low), None)
+    m = re.search(r"\b(10|[0-9])\s*/\s*10\b", low)          # "6/10"
+    if m:
+        return (part, int(m.group(1)))
+    m = re.fullmatch(r"\s*(10|[0-9])\s*", clean)            # bare "4"
+    if m:
+        return (None, int(m.group(1)))
+    if part:                                                # "back 3", "neck is a 6"
+        m = re.search(r"\b(10|[0-9])\b", low)
+        if m:
+            return (part, int(m.group(1)))
+    return None
 
 
 def is_plan_request(low):
@@ -293,6 +314,32 @@ def poll(quiet=False):
         red_flag = any(w in low for w in RED_FLAG_WORDS)
         part = next((b for b in BODY_PARTS if b in low), None)
 
+        # Daily-checkin severity reply (only while an injury is being tracked) — record
+        # the 1-10 reading, auto-resolve when it settles, and reply. Takes precedence so
+        # a bare "4" isn't logged as a random note.
+        if not override and injuries.active():
+            sv = parse_severity_reply(clean, low)
+            if sv is not None:
+                sv_part, sev = sv
+                inj, resolved = injuries.log_severity(sev, part=sv_part, when=msg_day)
+                if inj is not None:
+                    notes.append_note(f"{inj['part']} at {sev}/10", kind="pain", when=msg_day)
+                    logged += 1
+                    if resolved:
+                        reply = (f"Great — your {inj['part']} is settling ({sev}/10). I'll bring "
+                                 "training back to normal now, easing in moderate-first. 🎉")
+                    elif sev >= 7:
+                        reply = (f"Noted, {inj['part']} at {sev}/10. I'll keep loading off it. If "
+                                 "it's sharp, radiating, or getting worse, please see a clinician.")
+                    else:
+                        reply = (f"Got it — {inj['part']} at {sev}/10. Still programming around it; "
+                                 "I'll check in again tomorrow.")
+                    try:
+                        notify_telegram.send_message(creds, reply)
+                    except Exception:
+                        pass
+                    continue
+
         # Persist a pain/status note FIRST — so a mixed-intent message like
         # "plan me a workout, my knee hurts" never loses the constraint to the plan path.
         note_ack = None
@@ -300,6 +347,15 @@ def poll(quiet=False):
             notes.append_note(clean, kind="pain" if (is_pain and not is_recovery) else "status",
                               red_flag=red_flag or has_fever, when=msg_day)
             logged += 1
+            # Open a tracked injury for a fresh pain report → triggers daily check-ins.
+            if is_pain and not is_recovery and part:
+                m10 = (re.search(r"\b(10|[1-9])\s*/\s*10\b", low)
+                       or re.search(r"\b(?:a|at)\s+(10|[1-9])\b", low))
+                injuries.open_or_update(part, severity=int(m10.group(1)) if m10 else None,
+                                        when=msg_day)
+            # A recovery message clears all active injuries → stop check-ins, resume normal.
+            if is_recovery:
+                injuries.resolve_all()
             if red_flag:
                 note_ack = ("⚠️ Noted — that can be serious. If it's sharp, radiating, numb, "
                     "or comes with chest pain/dizziness, please STOP and see a clinician. "
@@ -379,6 +435,18 @@ def poll(quiet=False):
                 notify_telegram.send_message(creds, " ".join(reply_bits))
             except Exception:
                 pass
+
+    # Proactive daily injury check-ins. Piggybacks the 15-min poller: sends once per
+    # injury per day, and only after 8am local so we never ping at 3am.
+    try:
+        if datetime.now().hour >= 8:
+            for inj in injuries.needs_checkin():
+                notify_telegram.send_message(creds, f"Morning 🌤  how's your {inj['part']} "
+                    "today on a scale of 1–10 (10 = worst)? Reply with a number and I'll "
+                    "ease training back to normal once it's calm.")
+                injuries.mark_checkin(inj["part"])
+    except Exception:
+        pass
 
     if last_update > offset:
         save_offset(last_update)
