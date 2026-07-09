@@ -70,13 +70,14 @@ def _auto_resolve(inj):
     return False
 
 
-def open_or_update(part, severity=None, when=None):
-    """Open an injury for a body part (or update the existing active one)."""
+def open_or_update(part, severity=None, when=None, kind="injury"):
+    """Open a tracked issue (kind='injury' for body-part pain, 'condition' for illness
+    like fever/cold/asthma) or update the existing active one."""
     data = load()
     when = when or date.today().isoformat()
     inj = _find_active(data, part)
     if inj is None:
-        inj = {"part": part, "opened": when, "readings": [],
+        inj = {"part": part, "kind": kind, "opened": when, "readings": [],
                "resolved": False, "resolved_date": None, "last_checkin": None}
         data["injuries"].append(inj)
     if severity is not None:
@@ -130,10 +131,41 @@ def resolve_all():
     return n
 
 
+def checkin_interval_days(item):
+    """Taper the check-in cadence: daily at first, then less often as it improves.
+    Daily for the first 3 days; after that, based on the latest severity —
+    >=5 daily, 3-4 every other day, <=2 every third day (nearly resolved)."""
+    try:
+        days_open = (date.today() - date.fromisoformat(item.get("opened"))).days
+    except Exception:
+        days_open = 0
+    if days_open < 3:
+        return 1
+    sev = [r["severity"] for r in item.get("readings", []) if r.get("severity") is not None]
+    latest = sev[-1] if sev else None
+    if latest is None or latest >= 5:
+        return 1
+    if latest >= 3:
+        return 2
+    return 3
+
+
 def needs_checkin(when=None):
-    """Active injuries that haven't been checked in on today."""
-    when = when or date.today().isoformat()
-    return [i for i in active() if i.get("last_checkin") != when]
+    """Active issues due for a check-in today, honoring the tapering interval."""
+    today = date.today()
+    due = []
+    for i in active():
+        last = i.get("last_checkin")
+        if last is None:
+            due.append(i)
+            continue
+        try:
+            gap = (today - date.fromisoformat(last)).days
+        except Exception:
+            gap = 99
+        if gap >= checkin_interval_days(i):
+            due.append(i)
+    return due
 
 
 def mark_checkin(part, when=None):
@@ -150,11 +182,13 @@ def status():
     if not acts:
         print("No active injuries. Training can run normal.")
         return
-    print("=== Active injuries (program around these; ease back as severity drops) ===")
+    print("=== Active issues (program around these; ease back as severity drops) ===")
     for inj in acts:
         sev = [f"{r['date'][5:]}:{r['severity']}" for r in inj.get("readings", [])]
         latest = inj["readings"][-1]["severity"] if inj.get("readings") else "?"
-        print(f"• {inj['part']} (opened {inj['opened']}) — latest {latest}/10"
+        kind = inj.get("kind", "injury")
+        print(f"• [{kind}] {inj['part']} (opened {inj['opened']}) — latest {latest}/10, "
+              f"check-in every {checkin_interval_days(inj)}d"
               + (f"  trend {' '.join(sev[-6:])}" if sev else "  (no readings yet)"))
 
 
@@ -162,14 +196,15 @@ def main():
     p = argparse.ArgumentParser(description="Track injuries + daily severity.")
     p.add_argument("--status", action="store_true")
     p.add_argument("--open", metavar="PART")
+    p.add_argument("--kind", choices=["injury", "condition"], default="injury")
     p.add_argument("--severity", type=int)
     p.add_argument("--log", type=int, metavar="SEV")
     p.add_argument("--part")
     p.add_argument("--resolve", metavar="PART")
     args = p.parse_args()
     if args.open:
-        inj = open_or_update(args.open, severity=args.severity)
-        print(f"opened/updated: {inj['part']}")
+        inj = open_or_update(args.open, severity=args.severity, kind=args.kind)
+        print(f"opened/updated [{inj.get('kind')}]: {inj['part']}")
     if args.log is not None:
         inj, res = log_severity(args.log, part=args.part)
         if inj is None:

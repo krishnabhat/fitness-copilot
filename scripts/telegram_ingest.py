@@ -40,7 +40,13 @@ STATUS_WORDS = ["tired", "exhausted", "fatigued", "didn't sleep", "didnt sleep",
                 # illness / under-the-weather
                 "cold", "cough", "congested", "congestion", "sinus", "sore throat",
                 "throat", "headache", "migraine", "nausea", "nauseous", "chills",
-                "under the weather", "achy", "fever", "feverish", "sniffles", "runny nose"]
+                "under the weather", "achy", "fever", "feverish", "sniffles", "runny nose",
+                "asthma", "allergy", "allergies", "wheezing", "wheezy", "stomach bug"]
+# Illnesses/conditions worth TRACKING with daily check-ins (a subset of status —
+# not transient states like "tired"/"stressed"). The matched word becomes the label.
+ILLNESS_WORDS = ["fever", "cold", "cough", "flu", "congestion", "congested", "sinus",
+                 "sore throat", "asthma", "allergy", "allergies", "wheezing", "nausea",
+                 "migraine", "chills", "stomach bug", "sick"]
 RECOVERY_WORDS = ["recovered", "recovering", "feeling better", "better now", "back to normal",
                   "all better", "on the mend", "over the cold", "over it", "fully recovered",
                   "feeling good again", "back to full", "much better", "back to normal now",
@@ -247,7 +253,9 @@ def parse_activity(text):
         dur_min = float(m.group(1))
     else:
         m = re.search(r"(\d+(?:\.\d+)?)\s*(?:hours|hour|hrs|hr|h)\b", t)
-        if m:
+        # Guard against heart-rate ("max 192 HR" is NOT 192 hours): only treat as hours
+        # if it's a plausible workout duration (<=12h) and not heart-rate context.
+        if m and float(m.group(1)) <= 12 and "heart" not in t and "bpm" not in t:
             dur_min = float(m.group(1)) * 60
     return atype, dist_km, dur_min
 
@@ -321,6 +329,12 @@ def poll(quiet=False):
             sv = parse_severity_reply(clean, low)
             if sv is not None:
                 sv_part, sev = sv
+                if sv_part is None:   # match an active issue's own label (e.g. "asthma 4")
+                    for it in injuries.active():
+                        lbl = (it.get("part") or "").lower()
+                        if lbl and (lbl in low or lbl.split()[0] in low):
+                            sv_part = it["part"]
+                            break
                 inj, resolved = injuries.log_severity(sev, part=sv_part, when=msg_day)
                 if inj is not None:
                     notes.append_note(f"{inj['part']} at {sev}/10", kind="pain", when=msg_day)
@@ -353,7 +367,16 @@ def poll(quiet=False):
                        or re.search(r"\b(?:a|at)\s+(10|[1-9])\b", low))
                 injuries.open_or_update(part, severity=int(m10.group(1)) if m10 else None,
                                         when=msg_day)
-            # A recovery message clears all active injuries → stop check-ins, resume normal.
+            # Open a tracked CONDITION for a fresh illness report (fever/cold/asthma/etc.)
+            # → the bot then checks in daily on it, tapering as it improves.
+            if is_status and not is_recovery:
+                cond = next((w for w in ILLNESS_WORDS if w in low), None)
+                if cond:
+                    m10c = (re.search(r"\b(10|[1-9])\s*/\s*10\b", low)
+                            or re.search(r"\b(?:a|at)\s+(10|[1-9])\b", low))
+                    injuries.open_or_update(cond, severity=int(m10c.group(1)) if m10c else None,
+                                            kind="condition", when=msg_day)
+            # A recovery message clears all active issues → stop check-ins, resume normal.
             if is_recovery:
                 injuries.resolve_all()
             if red_flag:
@@ -397,10 +420,15 @@ def poll(quiet=False):
         strong_workout = (bool(dist_km) or bool(dur_min)
                           or atype in ("run", "bike", "walk", "swim", "yoga", "hiit")
                           or any(w in low for w in WORKOUT_SIGNAL))
+        # A correction ("No.. it was 45 mins", "actually 3 miles") should not create a
+        # NEW phantom activity — treat it as a note, not a logged workout.
+        is_correction = low.lstrip().startswith(
+            ("no ", "no,", "no.", "nope", "actually", "correction", "i meant", "sorry"))
         # For pain/status messages, only log an activity on a strong signal (so
         # "my lower back is tight" doesn't get mis-logged as a strength session).
-        has_workout = strong_workout if (is_pain or is_status) else (
-            (atype != "other") or dist_km or dur_min or any(w in low for w in WORKOUT_SIGNAL))
+        has_workout = False if is_correction else (
+            strong_workout if (is_pain or is_status) else (
+                (atype != "other") or dist_km or dur_min or any(w in low for w in WORKOUT_SIGNAL)))
 
         reply_bits = []
         if note_ack:
